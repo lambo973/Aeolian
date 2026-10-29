@@ -34,14 +34,14 @@ più la riga sul porting per Daisy e le modifiche datate. Nessun modulo DaisySP 
 ## Stato del codice
 File alla radice del repo (non in una sottocartella `v1.0-a/`, nonostante il nome): `eliane.h` (DSP header-only, host-testabile), `main.cpp` (Pod), `Makefile`, `README.md`, `host_test.cpp` (render su PC). libDaisy come cartella sorella (`LIBDAISY_DIR ?= ../libDaisy`).
 
-### v1.1 (2026-10-29, operativo, non ancora chiuso)
+### v1.1 (chiuso 2026-10-29)
 Mapping: tutti e sei i parametri via USB MIDI CC da Max, canale 1 — CC 20=hz, 21=amp, 22=densità, 23=ruvidità, 24=coda, 25=battimenti (tabella completa in `sintesi-progetto.md`). POT1/POT2/encoder disattivati: il Pod è hardware di passaggio, sostituito dal Seed su breadboard da v1.3 in poi. `amp` torna controllabile (non più fissa come in v1.0-b).
 
 Implementazione: aggiunto `MidiUsbHandler` (periferica USB interna); hz mappato esponenzialmente (`SetHzNorm`, 10-1000 Hz); coda sposta il range min/max del decay del comb (0,1-0,5 s a coda minima, 1-8 s a coda massima); battimenti scala il fattore di deriva di frequenza per voce, con minimo non-zero 0,05 (deriva sempre percettibile, mai del tutto ferma — richiesta esplicita dell'utente). Slew dedicato (50 ms) su coda e battimenti.
 
 **Causa di un bug lungo da trovare, per riferimento futuro**: dopo l'implementazione nessun CC arrivava al Daisy nonostante USB MIDI correttamente enumerato e Tx (Daisy->Max) funzionante. Non era il firmware (anche l'esempio ufficiale intatto non riceveva nulla), non era un permesso di sistema (Max riceveva da tre fonti diverse). La causa era in Max: gli oggetti `ctlout`/`noteout` non seguono le spunte "On" di MIDI Setup per scegliere la porta di destinazione — hanno un target esplicito, selezionabile con doppio click sull'oggetto in modalità performance (apre il menu reale delle porte, comprese quelle disattivate). L'oggetto puntava altrove. Lezione per Max in generale, non solo per questo progetto.
 
-Verificato (2026-10-29, sul Pod): tutti e sei gli slider rispondono. hz/amp/densità/ruvidità già buoni. Non verificato: coda e battimenti, in valutazione all'ascolto — v1.1 resta aperto finché l'utente non conferma anche questi due.
+Verificato (2026-10-29, sul Pod): tutti e sei gli slider rispondono. hz/amp/densità/ruvidità già buoni; coda e battimenti confermati all'ascolto dall'utente. **v1.1 chiuso.**
 
 ### v1.0-b (chiuso 2026-10-29)
 Mapping: encoder = hz (invariato), POT1 = densità, POT2 = ruvidità, `amp` fissa a 0,5 (il volume reale passa dal trimmer analogico del Pod sulle cuffie; sull'uscita AUX non c'è regolazione di volume in questo step — scelta consapevole dell'utente).
@@ -95,7 +95,7 @@ Ambiente dell'utente: macOS, VS Code, Daisy Toolchain, libDaisy clonata con `--r
 | v0 | Toolchain e tono di prova | fatto dall'utente |
 | v1.0-a | Eliane così com'è (hz, amp), block 64 | chiuso (2026-10-29): audio su hardware, 30 min senza glitch, ascolto A/B con l'originale (carattere simile, non aderenza 1:1) |
 | v1.0-b | Densità e ruvidità sui due potenziometri, hz su encoder | chiuso (2026-10-29): confermato all'ascolto sul Pod, controlli reattivi e senza scatti, nessuna saturazione |
-| v1.1 | Sei parametri via MIDI CC USB con slew | operativo (2026-10-29): tutti gli slider rispondono; coda/battimenti ancora in valutazione all'ascolto |
+| v1.1 | Sei parametri via MIDI CC USB con slew | chiuso (2026-10-29): tutti gli slider rispondono, coda/battimenti confermati all'ascolto |
 | v1.2 | Un dato reale + mapping in JSON | da fare |
 | v1.3 | OLED su Seed in breadboard | da fare |
 | v1.4 | LiPo + boost 5 V | da fare |
