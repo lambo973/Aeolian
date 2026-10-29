@@ -1,4 +1,4 @@
-# Aeolian — sintesi di progetto e roadmap v1 (documento v1.10, 2026-10-29)
+# Aeolian — sintesi di progetto e roadmap v1 (documento v1.11, 2026-10-29)
  
 Convenzione: [V] verificato su fonte (elencata in fondo) o con prova eseguita in sessione, [P] verificato in parte, [NV] non verificato, da controllare prima di contarci, [U] dichiarato o fornito dall'utente. Nessuna parte è stata provata su hardware: "verificato" significa confrontato con documentazione, sorgenti pubblici o compilazione/prova su PC, non testato al banco. Le note sulle licenze sono una lettura dei testi, non consulenza legale.
  
@@ -11,6 +11,14 @@ Cambiamenti v1.7 -> v1.8 (2026-10-29): v1.0-a chiuso. Confermati dall'utente gli
 Cambiamenti v1.8 -> v1.9 (2026-10-29): v1.0-b implementato. Scoperto (foto dell'utente) un terzo controllo fisico sul Pod non documentato finora: un trimmer analogico sullo stadio di uscita cuffie, non collegato all'ADC del Daisy, che non ha alcun effetto sull'uscita AUX. Decisione operativa: POT1 -> densità, POT2 -> ruvidità, `amp` fissa a 0,5 in firmware (il volume reale passa dal trimmer solo su cuffie; su AUX resta fisso in questo step, scelta consapevole dell'utente). `kEnvOffset` (costante 0,2) diventato parametro densità in `[-0,6, 0,9]`, già smussato dal lag2(13s) esistente. Il range dell'esponente di modulazione (fisso 0,9-1,7) diventato parametro ruvidità: estremo basso fisso 0,9, estremo alto variabile `[1,1, 4,0]`, con slew dedicato (tau 50 ms) perché non passa per nessun filtro a valle. Verificato su PC: nessun NaN su tutte le combinazioni estreme, picco massimo 0,58; a densità minima il suono può restare silenzioso oltre 20-30 s (inviluppo lentissimo, non un guasto). Compila pulito per Cortex-M7 (FLASH 82,9 KB). Non verificato: comportamento sul Pod reale, taratura dei due range all'ascolto.
 
 Cambiamenti v1.9 -> v1.10 (2026-10-29): v1.0-b chiuso. Confermato dall'utente ad ascolto sul Pod reale: controlli reattivi e senza scatti, encoder cambia frequenza, estremi di densità/ruvidità coerenti, mai raggiunta saturazione/"panic". Range lasciati invariati, nessuna taratura necessaria. Prossimo passo: v1.1 (sei parametri via MIDI CC da Max su USB, con slew nel firmware).
+
+Cambiamenti v1.10 -> v1.11 (2026-10-29): v1.1 implementato e confermato operativo end-to-end. Aggiunto `MidiUsbHandler` (USB MIDI, periferica interna FS) in `main.cpp`; i sei parametri arrivano via CC MIDI canale 1 da Max (CC 20-25, tabella sopra). Controlli fisici del Pod (POT1, POT2, encoder) disattivati per questo step — scelta dell'utente, coerente con la natura temporanea del Pod nella roadmap (sostituito dal Seed su breadboard da v1.3). `amp` torna controllabile via CC (non più fissa come in v1.0-b).
+
+Implementazione: hz mappato con curva esponenziale (`SetHzNorm`, 10-1000 Hz, stessa logica dei semitoni già usata sull'encoder). Coda: il range min/max del decay del comb (fisso 0,3-3 s nell'originale) diventa parametro mobile, da [0,1-0,5 s] a [1-8 s]. Battimenti: il fattore che pesa la deriva di frequenza per voce (fisso 0,5 nell'originale) diventa parametro con un minimo non-zero [0,05, 1,0] — su richiesta esplicita dell'utente, anche a battimenti minimi la deriva deve restare percettibile, mai completamente ferma. Entrambi con slew dedicato (50 ms) per evitare scatti.
+
+Debug MIDI (sessione lunga, causa reale trovata): dopo l'implementazione, nessun CC da Max veniva ricevuto dal Daisy, nonostante enumerazione USB corretta (il Pod compariva in Max come "Daisy Seed Built In", input e output) e trasmissione Daisy->Max perfettamente funzionante (verificato con un test inverso: POT1 sul Pod mandava Note On e CC, letti correttamente in Max). Escluse in ordine: bug noto di CoreMIDI sui messaggi CC/Pitch Bend (non applicabile: fallivano anche i Note On); problema di timing nell'armare la ricezione USB (attesa di 500 ms aggiunta, nessun effetto); bug nel nostro codice (anche l'esempio ufficiale intatto `seed/USB_MIDI/USB_MIDI.cpp`, flashato senza modifiche, non riceveva nulla); blocco di permessi/sistema di macOS su Max (escluso: Max riceveva perfettamente da tre fonti indipendenti — Daisy, bus IAC virtuale, controller MIDI Mix esterno). Causa reale, trovata dall'utente: gli oggetti `ctlout`/`noteout` di Max non seguono le spunte "On" della finestra MIDI Setup per scegliere dove mandare i dati — hanno un proprio target di porta esplicito, selezionabile con un doppio click sull'oggetto in modalità performance (apre un menu con tutti i dispositivi, anche quelli disattivati in MIDI Setup). L'oggetto nella patch puntava a un'altra porta di default, non al Daisy. Nessuna modifica firmware necessaria per la causa reale; la strumentazione di debug aggiunta nel frattempo (LED diagnostici, test Tx inverso) è stata rimossa dal firmware finale, mantenendo solo un lampo di LED1 ad ogni CC ricevuto come indicatore di ricezione permanente.
+
+Verificato (2026-10-29, sul Pod): tutti e sei gli slider rispondono in Max. hz, amp, densità, ruvidità già buoni (confermati in step precedenti). Non verificato: coda e battimenti, in valutazione all'ascolto da parte dell'utente — v1.1 non ancora chiuso.
  
 ## Idea e obiettivo
 Device portatile a batteria per musica generativa (drone / stile Eno) guidata da dati esterni (API; in futuro bioritmo). Prima strumento personale (v1); replicabilità (firmware open-source + BOM/kit) da valutare solo dopo un checkpoint di ascolto con 4-5 persone della cerchia sperimentale.
@@ -86,7 +94,16 @@ Parametri proposti per la v1 (da validare all'ascolto):
 | 4 | ruvidità (profondità di modulazione) | range dell'esponente 0,9-1,7 |
 | 5 | coda (lunghezza del comb) | range del decay 0,3-3 s |
 | 6 | battimenti (velocità) | fattore x/2 Hz sulla deriva |
-Restano fissi: rotazione stereo, lag di 13 s. In v1.0-a erano esposti solo 1 e 2 (hz, amp); in v1.0-b si aggiungono 3 e 4 (densità, ruvidità) su POT1/POT2, amp passa fissa.
+Restano fissi: rotazione stereo, lag di 13 s. In v1.0-a erano esposti solo 1 e 2 (hz, amp); in v1.0-b si aggiungono 3 e 4 (densità, ruvidità) su POT1/POT2, amp passa fissa; in v1.1 tutti e sei arrivano via MIDI CC da Max (canale 1), POT1/POT2/encoder disattivati:
+
+| CC | Parametro | Mappatura nel firmware |
+|---|---|---|
+| 20 | hz | esponenziale, 10-1000 Hz (0 = 10 Hz, 127 = 1000 Hz) |
+| 21 | amp | lineare, 0-1 |
+| 22 | densità | lineare su offset [-0,6, 0,9] |
+| 23 | ruvidità | lineare su estremo alto dell'esponente [1,1, 4,0] (estremo basso fisso 0,9) |
+| 24 | coda | lineare su range del decay, da [0,1-0,5 s] a [1-8 s] |
+| 25 | battimenti | lineare su fattore di deriva [0,05, 1,0] (mai zero vero, deriva sempre percettibile) |
  
 Note di ascolto: con hz = 60 le voci subarmoniche scendono a circa 30 e 20 Hz, e l'uscita del Seed è accoppiata in AC: sul Daisy parte di quel contenuto sarà attenuata rispetto all'originale su norns [V per l'accoppiamento AC, effetto da ascoltare].
  
@@ -122,7 +139,7 @@ Note di ascolto: con hz = 60 le voci subarmoniche scendono a circa 30 e 20 Hz, e
 | v0 | Daisy Toolchain e VS Code installati su macOS, firmware di prova (audio in uscita) caricato via USB (DFU) | Pod | da fare (da parte dell'utente) | Senti un tono dal jack |
 | v1.0-a | Porting di Eliane così com'è (solo hz e amp), block size 64, intestazione di @sixolet copiata | Pod, alimentato USB | **Chiuso (2026-10-29).** Audio confermato su hardware (dopo fix `hw.StartAdc()`); carico CPU misurato 36-40% medio, 40-41% massimo (sotto soglia gialla 50%); 30 minuti di funzionamento continuo senza interruzioni confermati dall'utente (solo potenziometro volume attivo); ascolto A/B con l'originale confermato dall'utente: non aderenza 1:1 (porting SC -> C++), ma carattere simile e analogo — voci sovrapposte e battimenti coerenti con l'originale | Tutti i criteri soddisfatti |
 | v1.0-b | Densità e ruvidità sui due potenziometri, hz sull'encoder | Pod | **Chiuso (2026-10-29).** Confermato all'ascolto sul Pod: controlli reattivi e senza scatti, encoder cambia frequenza, estremi di densità/ruvidità coerenti, mai raggiunta saturazione/"panic". Range lasciati come da prima implementazione | Tutti i criteri soddisfatti |
-| v1.1 | Sei parametri via MIDI CC da Max su USB, con slew nel firmware | Pod + Mac | da fare | Nessuna scalettatura udibile; solo se serve, coppie CC a 14 bit |
+| v1.1 | Sei parametri via MIDI CC da Max su USB, con slew nel firmware | Pod + Mac | implementato e confermato operativo (2026-10-29): tutti gli slider rispondono in Max; hz/amp/densità/ruvidità già buoni; coda/battimenti in valutazione all'ascolto | Nessuna scalettatura udibile; solo se serve, coppie CC a 14 bit |
 | v1.2 | Un dato reale (es. pressione barometrica da un'API scelta) letto da Max, mapping in file JSON | Pod + Mac | da fare | Tre sessioni da un'ora registrate; il mapping cambia solo modificando il JSON |
 | v1.3 | OLED con sei barre e nome della sorgente | Seed su breadboard + OLED | da fare | Display fluido, nessun glitch audio. Prima di acquistare, controllare il chip dello schermo contro i driver di libDaisy |
 | v1.4 | LiPo + boost 5 V (con protezione) | Seed su breadboard | da fare | Autonomia misurata; confronto A/B alla cieca con alimentazione USB per rumore del boost |

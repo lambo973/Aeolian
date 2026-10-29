@@ -7,10 +7,13 @@
 //   // (seven sines phase-modulating each other in a crosslinked ring)
 // Porting Daisy: progetto Aeolian, 2026-10-28. Licenza: GNU GPL v3.0 (vedi eliane.h).
 //
-// Controlli (v1.0-b): encoder = hz (un semitono per scatto, 10..1000 Hz, default 60),
-// POT1 = densita', POT2 = ruvidita'. amp e' fissa (0.5): il volume reale si regola col
-// trimmer analogico del Pod (stadio cuffie) o, sull'uscita AUX, non e' regolabile in questo step.
-// LED1: verde fisso = in esecuzione. LED2: carico CPU (verde < 50%, giallo < 80%, rosso oltre).
+// Controlli (v1.1): tutti e sei i parametri (hz, amp, densita', ruvidita', coda, battimenti)
+// arrivano via USB MIDI CC da Max su canale 1 (CC 20-25, vedi switch sotto). I controlli
+// fisici del Pod (POT1, POT2, encoder) sono disattivati: il Pod e' hardware di passaggio
+// per questa fase del progetto, il mapping vive fuori dal Daisy (vedi sintesi-progetto.md).
+// LED1: verde lampo breve ad ogni messaggio MIDI ricevuto, altrimenti spento (indicatore di
+// ricezione, utile per capire al volo se la patch Max sta davvero parlando col Pod).
+// LED2: carico CPU (verde < 50%, giallo < 80%, rosso oltre).
 // Prerequisiti: libDaisy compilata, Daisy Toolchain. Nessun modulo DaisySP.
 #include "daisy_pod.h"
 #include "util/CpuLoadMeter.h"
@@ -21,6 +24,7 @@ using namespace daisy;
 static DaisyPod       hw;
 static eliane::Eliane synth;
 static CpuLoadMeter   cpu;
+static MidiUsbHandler midi; // MIDI su USB (hw.midi e' il MidiUartHandler integrato, TRS/UART, riservato a v2)
 
 // Buffer del comb in SDRAM (2 x 14400 float = 115 kB)
 static float DSY_SDRAM_BSS combL[eliane::kCombMax];
@@ -52,26 +56,46 @@ int main(void)
     synth.SetAmp(0.5f);
     cpu.Init(sr, eliane::kBlock);
 
+    MidiUsbHandler::Config midi_cfg;
+    midi_cfg.transport_config.periph = MidiUsbTransport::Config::INTERNAL;
+    midi.Init(midi_cfg);
+
     hw.StartAdc();
     hw.StartAudio(AudioCallback);
 
-    float hzTarget = 60.0f;
     uint32_t t0 = System::GetNow();
+    // Timestamp dell'ultimo messaggio MIDI ricevuto (qualsiasi tipo), per il lampo di LED1.
+    // Inizializzato "nel passato remoto" (overflow unsigned voluto) per non accendersi al boot.
+    uint32_t lastMidiMs = (uint32_t)-100000;
     while(1)
     {
-        hw.ProcessAllControls();
-
-        const int32_t inc = hw.encoder.Increment();
-        if(inc != 0)
+        midi.Listen();
+        while(midi.HasEvents())
         {
-            hzTarget *= std::pow(2.0f, float(inc) / 12.0f);
-            synth.SetHz(hzTarget);
-            hzTarget = synth.Hz(); // allinea ai limiti
+            auto msg = midi.PopEvent();
+            lastMidiMs = System::GetNow();
+            if(msg.type == ControlChange)
+            {
+                auto cc = msg.AsControlChange();
+                if(cc.channel == 0) // canale MIDI 1 (0-indicizzato internamente)
+                {
+                    const float v = float(cc.value) / 127.0f;
+                    switch(cc.control_number)
+                    {
+                        case 20: synth.SetHzNorm(v);    break; // hz
+                        case 21: synth.SetAmp(v);       break; // amp
+                        case 22: synth.SetDensity(v);   break; // densita'
+                        case 23: synth.SetRoughness(v); break; // ruvidita'
+                        case 24: synth.SetTail(v);      break; // coda
+                        case 25: synth.SetBeat(v);      break; // battimenti
+                        default: break;
+                    }
+                }
+            }
         }
-        synth.SetDensity(hw.knob1.Process());
-        synth.SetRoughness(hw.knob2.Process());
 
-        hw.led1.Set(0.0f, 0.3f, 0.0f);
+        if(System::GetNow() - lastMidiMs < 100) hw.led1.Set(0.0f, 0.3f, 0.0f);
+        else                                    hw.led1.Set(0.0f, 0.0f, 0.0f);
         if(System::GetNow() - t0 > 500)
         {
             t0 = System::GetNow();

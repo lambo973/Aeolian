@@ -16,6 +16,12 @@
 //   - esposti anche densita' (offset degli inviluppi lenti) e ruvidita' (range dell'esponente
 //     di profondita' di modulazione); amp resta fissa in questo step (vedi main.cpp)
 //   - range di densita'/ruvidita' NON verificati all'ascolto, da tarare sul Pod
+// v1.1 (2026-10-29, progetto Aeolian):
+//   - esposti anche coda (range del decay del comb) e battimenti (profondita' della deriva
+//     di frequenza per voce); amp torna controllabile (non piu' fissa)
+//   - tutti e sei i parametri arrivano da MIDI CC via USB (Max), i controlli locali del Pod
+//     sono disattivati in questo step (vedi main.cpp)
+//   - range di coda/battimenti NON verificati all'ascolto, da tarare dalla patch Max
 //
 // Questo programma e' software libero: puoi redistribuirlo e/o modificarlo secondo i termini
 // della GNU General Public License come pubblicata dalla Free Software Foundation, versione 3
@@ -45,6 +51,14 @@ constexpr float kDensityMax  =  0.9f; // offset massimo (POT1 a destra): suono f
 constexpr float kRoughLoExpo =  0.9f; // esponente minimo della profondita' di modulazione, fisso
 constexpr float kRoughHiMin  =  1.1f; // esponente massimo a ruvidita' minima (POT2 a sinistra)
 constexpr float kRoughHiMax  =  4.0f; // esponente massimo a ruvidita' massima (POT2 a destra)
+
+// v1.1: range dei due parametri aggiuntivi, non verificati all'ascolto (da tarare dalla patch Max)
+constexpr float kTailLoMin = 0.1f; // decay minimo del comb, a coda minima
+constexpr float kTailLoMax = 1.0f; // decay minimo del comb, a coda massima
+constexpr float kTailHiMin = 0.5f; // decay massimo del comb, a coda minima
+constexpr float kTailHiMax = 8.0f; // decay massimo del comb, a coda massima
+constexpr float kBeatMin   = 0.05f; // deriva minima (quasi fissa, ma percettibile), a battimenti 0
+constexpr float kBeatMax   = 1.0f;  // deriva massima (il doppio dell'originale 0.5), a battimenti 1
 
 // Generatore pseudo-casuale xorshift32, uniforme in [-1,1)
 class Rng
@@ -185,7 +199,9 @@ class Eliane
         slewHz_ = 1.0f - std::exp(-1.0f / (1.0f * blockRate));   // tau 1 s
         slewAmp_ = 1.0f - std::exp(-1.0f / (0.05f * blockRate)); // tau 50 ms
         slewRough_ = slewAmp_; // stessa tau 50 ms: evita scatti quando si gira POT2
-        hz_ = hzTarget_; amp_ = ampTarget_; rough_ = roughTarget_;
+        slewTail_  = slewAmp_; // idem per coda e battimenti, arrivano via MIDI CC (v1.1)
+        slewBeat_  = slewAmp_;
+        hz_ = hzTarget_; amp_ = ampTarget_; rough_ = roughTarget_; tail_ = tailTarget_; beat_ = beatTarget_;
         return true;
     }
 
@@ -194,11 +210,25 @@ class Eliane
     void SetAmp(float a)  { ampTarget_ = a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a); }
     float Hz() const { return hzTarget_; }
 
-    // v1.0-b: densita' e ruvidita', normalizzate [0,1] (tipicamente da un potenziometro)
+    // v1.1: hz da un valore normalizzato [0,1] (es. CC MIDI 0-127/127), mappatura esponenziale
+    // 10..1000 Hz (come l'encoder a semitoni: l'orecchio sente le frequenze in scala logaritmica)
+    void SetHzNorm(float t)
+    {
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        SetHz(10.0f * std::pow(100.0f, t)); // 10 * (1000/10)^t
+    }
+
+    // v1.0-b: densita' e ruvidita', normalizzate [0,1] (tipicamente da un potenziometro o CC MIDI)
     // densita': passa per il lag2(13s) gia' presente in GainEnv, nessuno scatto anche senza slew dedicato
     void SetDensity(float d)   { density_     = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d); }
     // ruvidita': agisce direttamente sulla profondita' di modulazione per campione, serve uno slew dedicato
     void SetRoughness(float r) { roughTarget_ = r < 0.0f ? 0.0f : (r > 1.0f ? 1.0f : r); }
+
+    // v1.1: coda e battimenti, normalizzate [0,1] (da CC MIDI)
+    // coda: sposta il range min/max del decay del comb, serve slew (altrimenti salto nel guadagno di feedback)
+    void SetTail(float t) { tailTarget_ = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t); }
+    // battimenti: scala la profondita' della deriva di frequenza per voce, serve slew (agisce per campione)
+    void SetBeat(float b) { beatTarget_ = b < 0.0f ? 0.0f : (b > 1.0f ? 1.0f : b); }
 
     // Produce esattamente kBlock campioni per canale
     void Process(float* outL, float* outR)
@@ -207,12 +237,15 @@ class Eliane
         hz_    += (hzTarget_ - hz_) * slewHz_;
         amp_   += (ampTarget_ - amp_) * slewAmp_;
         rough_ += (roughTarget_ - rough_) * slewRough_;
+        tail_  += (tailTarget_ - tail_) * slewTail_;
+        beat_  += (beatTarget_ - beat_) * slewBeat_;
         const float hz = hz_;
 
         const float nice   = niceN_.Process(1.0f / 200.0f, dt);
         const float hiExpo = kRoughHiMin + rough_ * (kRoughHiMax - kRoughHiMin);
         const float expo   = kRoughLoExpo + 0.5f * (nice + 1.0f) * (hiExpo - kRoughLoExpo); // nice.range(loExpo, hiExpo)
         const float densityOffset = kDensityMin + density_ * (kDensityMax - kDensityMin);
+        const float beatFactor = kBeatMin + beat_ * (kBeatMax - kBeatMin);
 
         float mix[2][kBlock];
         std::memset(mix, 0, sizeof(mix));
@@ -234,7 +267,7 @@ class Eliane
             const float ratio = std::pow(2.0f, kIntervals[x] / 12.0f);
             for(int c = 0; c < 2; c++)
             {
-                inc[c] = (hz * ratio + (float(x) * 0.5f) * v.freqN[c].Process(1.0f / 15.0f, dt)) / sr_;
+                inc[c] = (hz * ratio + (float(x) * beatFactor) * v.freqN[c].Process(1.0f / 15.0f, dt)) / sr_;
                 incSub[c] = 0.0f;
             }
             // voci 5 e 6: crossfade (equal power, come SelectX) tra parziale alto e subarmonica
@@ -283,8 +316,11 @@ class Eliane
         prevIdx_ = 1 - prevIdx_;
 
         // CombN: uscita = segnale ritardato (solo wet), g = 0.001^(delay/decay)
-        const float dv    = decayN_.Process(0.02f, dt);
-        const float decay = 0.3f * std::pow(10.0f, 0.5f * (dv + 1.0f)); // exprange(0.3, 3.0)
+        // v1.1: il range min/max del decay (0.3-3 s nell'originale) si sposta con "coda"
+        const float tailLo = kTailLoMin + tail_ * (kTailLoMax - kTailLoMin);
+        const float tailHi = kTailHiMin + tail_ * (kTailHiMax - kTailHiMin);
+        const float dv     = decayN_.Process(0.02f, dt);
+        const float decay  = tailLo * std::pow(tailHi / tailLo, 0.5f * (dv + 1.0f)); // exprange(tailLo, tailHi)
         const float delay = float(combLen_) / sr_;
         const float g     = std::pow(0.001f, delay / decay);
         const float scale = 0.5f * amp_;
@@ -322,7 +358,9 @@ class Eliane
     float    hz_ = 60.0f, hzTarget_ = 60.0f, amp_ = 0.5f, ampTarget_ = 0.5f;
     float    density_ = 0.5f; // normalizzato [0,1], gia' smussato dal lag2(13s) di GainEnv
     float    rough_ = 0.5f, roughTarget_ = 0.5f; // normalizzato [0,1]
-    float    lagB1_ = 0, slewHz_ = 0, slewAmp_ = 0, slewRough_ = 0;
+    float    tail_ = 0.5f, tailTarget_ = 0.5f;   // normalizzato [0,1]
+    float    beat_ = 0.5f, beatTarget_ = 0.5f;   // normalizzato [0,1]
+    float    lagB1_ = 0, slewHz_ = 0, slewAmp_ = 0, slewRough_ = 0, slewTail_ = 0, slewBeat_ = 0;
 };
 
 } // namespace eliane
