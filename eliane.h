@@ -12,6 +12,10 @@
 //   - riscrittura in C++ senza dipendenze (nessun modulo DaisySP)
 //   - UGen SuperCollider sostituiti da equivalenti propri (vedi note nel codice)
 //   - esposti solo hz e amp; gli altri valori restano costanti dell'originale
+// v1.0-b (2026-10-29, progetto Aeolian):
+//   - esposti anche densita' (offset degli inviluppi lenti) e ruvidita' (range dell'esponente
+//     di profondita' di modulazione); amp resta fissa in questo step (vedi main.cpp)
+//   - range di densita'/ruvidita' NON verificati all'ascolto, da tarare sul Pod
 //
 // Questo programma e' software libero: puoi redistribuirlo e/o modificarlo secondo i termini
 // della GNU General Public License come pubblicata dalla Free Software Foundation, versione 3
@@ -33,8 +37,14 @@ constexpr float kTwoPi  = 6.28318530717959f;
 
 // Costanti dell'originale
 constexpr float kIntervals[kVoices] = {0, 7, 14, 20, 27, 34, 41}; // semitoni
-constexpr float kEnvOffset = 0.2f;   // add: di LFDNoise3
 constexpr float kLagSec    = 13.0f;  // lag2 inviluppi
+
+// v1.0-b: range dei due nuovi parametri, non verificati all'ascolto (da tarare sul Pod)
+constexpr float kDensityMin  = -0.6f; // offset minimo (POT1 a sinistra): suono rado
+constexpr float kDensityMax  =  0.9f; // offset massimo (POT1 a destra): suono fitto
+constexpr float kRoughLoExpo =  0.9f; // esponente minimo della profondita' di modulazione, fisso
+constexpr float kRoughHiMin  =  1.1f; // esponente massimo a ruvidita' minima (POT2 a sinistra)
+constexpr float kRoughHiMax  =  4.0f; // esponente massimo a ruvidita' massima (POT2 a destra)
 
 // Generatore pseudo-casuale xorshift32, uniforme in [-1,1)
 class Rng
@@ -115,16 +125,17 @@ class Lag2
     bool  init_ = false;
 };
 
-// clip(LFDNoise3.kr(LFNoise2.kr(1/300).range(1/120,1/30), add: 0.2), 0, 1).lag2(13)
+// clip(LFDNoise3.kr(LFNoise2.kr(1/300).range(1/120,1/30), add: offset), 0, 1).lag2(13)
+// offset era la costante kEnvOffset (0.2) nell'originale; in v1.0-b e' il parametro densita'
 class GainEnv
 {
   public:
     void Init(Rng* r) { rate_.Init(r); noise_.Init(r); }
-    float Process(float dt, float lagB1)
+    float Process(float dt, float lagB1, float offset)
     {
         const float rn   = rate_.Process(1.0f / 300.0f, dt);
         const float rate = 1.0f / 120.0f + 0.5f * (rn + 1.0f) * (1.0f / 30.0f - 1.0f / 120.0f);
-        float v = noise_.Process(rate, dt) + kEnvOffset;
+        float v = noise_.Process(rate, dt) + offset;
         v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
         return lag_.Process(v, lagB1);
     }
@@ -173,7 +184,8 @@ class Eliane
         lagB1_  = std::exp(std::log(0.001f) / (kLagSec * blockRate));
         slewHz_ = 1.0f - std::exp(-1.0f / (1.0f * blockRate));   // tau 1 s
         slewAmp_ = 1.0f - std::exp(-1.0f / (0.05f * blockRate)); // tau 50 ms
-        hz_ = hzTarget_; amp_ = ampTarget_;
+        slewRough_ = slewAmp_; // stessa tau 50 ms: evita scatti quando si gira POT2
+        hz_ = hzTarget_; amp_ = ampTarget_; rough_ = roughTarget_;
         return true;
     }
 
@@ -182,16 +194,25 @@ class Eliane
     void SetAmp(float a)  { ampTarget_ = a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a); }
     float Hz() const { return hzTarget_; }
 
+    // v1.0-b: densita' e ruvidita', normalizzate [0,1] (tipicamente da un potenziometro)
+    // densita': passa per il lag2(13s) gia' presente in GainEnv, nessuno scatto anche senza slew dedicato
+    void SetDensity(float d)   { density_     = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d); }
+    // ruvidita': agisce direttamente sulla profondita' di modulazione per campione, serve uno slew dedicato
+    void SetRoughness(float r) { roughTarget_ = r < 0.0f ? 0.0f : (r > 1.0f ? 1.0f : r); }
+
     // Produce esattamente kBlock campioni per canale
     void Process(float* outL, float* outR)
     {
         const float dt = float(kBlock) / sr_;
-        hz_  += (hzTarget_ - hz_) * slewHz_;
-        amp_ += (ampTarget_ - amp_) * slewAmp_;
+        hz_    += (hzTarget_ - hz_) * slewHz_;
+        amp_   += (ampTarget_ - amp_) * slewAmp_;
+        rough_ += (roughTarget_ - rough_) * slewRough_;
         const float hz = hz_;
 
-        const float nice = niceN_.Process(1.0f / 200.0f, dt);
-        const float expo = 0.9f + 0.5f * (nice + 1.0f) * (1.7f - 0.9f); // nice.range(0.9, 1.7)
+        const float nice   = niceN_.Process(1.0f / 200.0f, dt);
+        const float hiExpo = kRoughHiMin + rough_ * (kRoughHiMax - kRoughHiMin);
+        const float expo   = kRoughLoExpo + 0.5f * (nice + 1.0f) * (hiExpo - kRoughLoExpo); // nice.range(loExpo, hiExpo)
+        const float densityOffset = kDensityMin + density_ * (kDensityMax - kDensityMin);
 
         float mix[2][kBlock];
         std::memset(mix, 0, sizeof(mix));
@@ -206,8 +227,8 @@ class Eliane
             const float modK  = kPi * depth;
             const float rot   = v.rotN.Process(1.0f / 25.0f, dt) * 0.5f * kPi; // Rotate2 pos*pi
             const float ca = std::cos(rot), sa = std::sin(rot);
-            const float fbG  = v.fbEnv.Process(dt, lagB1_);
-            const float outG = v.outEnv.Process(dt, lagB1_);
+            const float fbG  = v.fbEnv.Process(dt, lagB1_, densityOffset);
+            const float outG = v.outEnv.Process(dt, lagB1_, densityOffset);
 
             float inc[2], incSub[2];
             const float ratio = std::pow(2.0f, kIntervals[x] / 12.0f);
@@ -299,7 +320,9 @@ class Eliane
     Noise2   niceN_, decayN_;
     Rng      rng_;
     float    hz_ = 60.0f, hzTarget_ = 60.0f, amp_ = 0.5f, ampTarget_ = 0.5f;
-    float    lagB1_ = 0, slewHz_ = 0, slewAmp_ = 0;
+    float    density_ = 0.5f; // normalizzato [0,1], gia' smussato dal lag2(13s) di GainEnv
+    float    rough_ = 0.5f, roughTarget_ = 0.5f; // normalizzato [0,1]
+    float    lagB1_ = 0, slewHz_ = 0, slewAmp_ = 0, slewRough_ = 0;
 };
 
 } // namespace eliane

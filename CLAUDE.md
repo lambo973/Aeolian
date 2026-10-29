@@ -31,8 +31,19 @@ Il firmware è un porting di "Eliane" di @sixolet (da dronecaster, GPLv3): opera
 ```
 più la riga sul porting per Daisy e le modifiche datate. Nessun modulo DaisySP usato (evita la questione LGPL). libDaisy è MIT.
 
-## Stato del codice (v1.0-a)
-Cartella `v1.0-a/`: `eliane.h` (DSP header-only, host-testabile), `main.cpp` (Pod), `Makefile`, `README.md`, `host_test.cpp` (render su PC). libDaisy come cartella sorella (`LIBDAISY_DIR ?= ../libDaisy`).
+## Stato del codice
+File alla radice del repo (non in una sottocartella `v1.0-a/`, nonostante il nome): `eliane.h` (DSP header-only, host-testabile), `main.cpp` (Pod), `Makefile`, `README.md`, `host_test.cpp` (render su PC). libDaisy come cartella sorella (`LIBDAISY_DIR ?= ../libDaisy`).
+
+### v1.0-b (chiuso 2026-10-29)
+Mapping: encoder = hz (invariato), POT1 = densità, POT2 = ruvidità, `amp` fissa a 0,5 (il volume reale passa dal trimmer analogico del Pod sulle cuffie; sull'uscita AUX non c'è regolazione di volume in questo step — scelta consapevole dell'utente).
+
+Implementazione: `kEnvOffset` (costante 0,2) diventato parametro `density_` in `[0,1]`, mappato su un offset `[-0,6, 0,9]` passato a `GainEnv::Process`; già smussato dal lag2(13 s) esistente, nessuno slew dedicato necessario. Il range fisso dell'esponente di modulazione (0,9-1,7) diventato `rough_` in `[0,1]`: estremo basso fisso a 0,9, estremo alto che scorre da 1,1 a 4,0; serve uno slew dedicato (tau 50 ms, come `amp`) perché agisce direttamente sulla profondità di modulazione per campione, senza altro filtro a valle.
+
+Verificato (2026-10-29, su PC): nessun NaN su tutte le combinazioni estreme di densità/ruvidità, picco massimo 0,58. A densità minima il suono può restare silenzioso anche oltre 20-30 s prima di ricomparire (inviluppo lentissimo, non un guasto). Compila pulito per Cortex-M7: FLASH 82,9 KB (63%), SRAM 59,2 KB, SDRAM 115 KB.
+
+Verificato anche su hardware (2026-10-29): flashato sul Pod, controlli reattivi e senza scatti, encoder cambia frequenza correttamente, estremi di densità/ruvidità giudicati coerenti all'ascolto, mai raggiunta saturazione/"panic". Range lasciati come da prima implementazione, nessuna modifica alle costanti richiesta.
+
+### v1.0-a (chiuso 2026-10-29)
 
 Verificato (2026-10-28):
 - Il firmware compila e linka per Cortex-M7 (arm-none-eabi-gcc 13.2.1): FLASH 90,7 KB, SRAM 61,7 KB, SDRAM 115 KB.
@@ -53,10 +64,12 @@ Percorso di debug seguito (per riferimento, ipotesi scartate):
 
 Nota (superata): il sfarfallio simmetrico dei due LED osservato nel primissimo tentativo (prima di isolare il problema) non è stato spiegato con certezza, ma non si è più ripresentato durante il debug strumentato; non bloccante, la causa trovata spiega il sintomo principale (silenzio totale, manopole inerti).
 
-## Prossimi passi per chiudere v1.0-a
-1. Rimuovere la strumentazione di debug aggiunta per questa sessione (log seriale, bootCount, badCount, picco, lettura di knob2) da `main.cpp`/`eliane.h`, se non la si vuole tenere per il test di stabilità sotto.
-2. Ascolto A/B con l'originale (norns shield) a parità di hz.
-3. 30 minuti di funzionamento continuo senza click né glitch.
+**v1.0-b chiuso (2026-10-29).** Confermato dall'utente ad ascolto: controlli reattivi, encoder cambia frequenza, estremi di densità/ruvidità coerenti, mai raggiunto un punto di saturazione/"panic". Range considerati buoni così come sono, nessuna taratura richiesta.
+
+## v1.0-a (chiuso 2026-10-29): checklist completata
+1. ~~Rimuovere la strumentazione di debug~~ — fatto: `main.cpp`/`eliane.h` nel repo non contengono log seriale, bootCount, badCount né letture di debug.
+2. ~~Ascolto A/B con l'originale (norns shield) a parità di hz~~ — fatto: confermato dall'utente il 2026-10-29. Non c'è aderenza 1:1 (porting SC -> C++), ma all'ascolto il carattere è simile e analogo: voci che si sovrappongono e battimenti che variano e si alternano in modo coerente con l'originale.
+3. ~~30 minuti di funzionamento continuo senza click né glitch~~ — confermato dall'utente il 2026-10-29: 30' di esecuzione con solo il potenziometro del volume attivo, nessuna interruzione.
 
 ## Build e flash
 ```
@@ -71,8 +84,8 @@ Ambiente dell'utente: macOS, VS Code, Daisy Toolchain, libDaisy clonata con `--r
 | Step | Cosa | Stato |
 |---|---|---|
 | v0 | Toolchain e tono di prova | fatto dall'utente |
-| v1.0-a | Eliane così com'è (hz, amp), block 64 | audio confermato su hardware (2026-10-29); mancano ascolto A/B con l'originale e 30 min senza glitch |
-| v1.0-b | Densità e ruvidità sui due potenziometri, hz su encoder | da fare |
+| v1.0-a | Eliane così com'è (hz, amp), block 64 | chiuso (2026-10-29): audio su hardware, 30 min senza glitch, ascolto A/B con l'originale (carattere simile, non aderenza 1:1) |
+| v1.0-b | Densità e ruvidità sui due potenziometri, hz su encoder | chiuso (2026-10-29): confermato all'ascolto sul Pod, controlli reattivi e senza scatti, nessuna saturazione |
 | v1.1 | Sei parametri via MIDI CC USB con slew | da fare |
 | v1.2 | Un dato reale + mapping in JSON | da fare |
 | v1.3 | OLED su Seed in breadboard | da fare |

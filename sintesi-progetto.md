@@ -1,10 +1,16 @@
-# Aeolian — sintesi di progetto e roadmap v1 (documento v1.7, 2026-10-29)
+# Aeolian — sintesi di progetto e roadmap v1 (documento v1.10, 2026-10-29)
  
 Convenzione: [V] verificato su fonte (elencata in fondo) o con prova eseguita in sessione, [P] verificato in parte, [NV] non verificato, da controllare prima di contarci, [U] dichiarato o fornito dall'utente. Nessuna parte è stata provata su hardware: "verificato" significa confrontato con documentazione, sorgenti pubblici o compilazione/prova su PC, non testato al banco. Le note sulle licenze sono una lettura dei testi, non consulenza legale.
  
 Cambiamenti rispetto a v1.5 del documento: l'utente ha approvato il passaggio a C++/libDaisy; scritto il porting v1.0-a di Eliane (eliane.h, main.cpp, Makefile, README); compilato per ARM (Cortex-M7) con libDaisy e provato il solo DSP su PC; verificate in sorgente le API usate (CpuLoadMeter, DSY_SDRAM_BSS, Pod); SelectX verificato equal power.
 
 Cambiamenti v1.6 -> v1.7 (2026-10-29): risolto il bug "nessun audio sul Pod" apparso al primo test hardware. Causa verificata: in `main.cpp` mancava la chiamata `hw.StartAdc()`. `DaisyPod::Init()` configura i canali delle manopole (`InitKnobs()`) ma non avvia la conversione ADC; senza `StartAdc()`, `hw.knob1.Process()`/`hw.knob2.Process()` restituiscono sempre 0, quindi `amp` restava a 0 e nessuna energia nuova entrava nel comb (uscita a zero dopo il transitorio di avvio). Confermato per confronto con 5 esempi Pod ufficiali in questo stesso repository (ByteBeatOne, ChordMachine, Midi, MultiEffect, EuclideanDrums, SimpleLed), tutti con `StartAdc()` prima di `StartAudio()`. Percorso di debug seguito: test con sinusoide fissa (isolato l'hardware/Pod, ok) -> reintrodotto Eliane con log seriale USB (StartLog/PrintLine) e contatori di debug (bootCount in BACKUP_SRAM, badCount per i NaN, picco di uscita, valori letti dalle manopole) -> escluso il loop di riavvio (nessuna ripetizione di "boot #") -> escluso il sovraccarico CPU (36-40% medio, sotto la soglia del 50%) -> escluso il NaN (bad=0 sempre) -> isolato: knob1/knob2 restavano a 0/100 anche a manopola tutta girata -> causa trovata. Dopo il fix: manopola letta correttamente (es. 58/100), picco di uscita passato da 0 a ~0,3-0,37, utente confermato ad ascolto "ora lo sento bene".
+
+Cambiamenti v1.7 -> v1.8 (2026-10-29): v1.0-a chiuso. Confermati dall'utente gli ultimi due criteri rimasti: 30 minuti di funzionamento continuo senza interruzioni (solo potenziometro volume attivo) e ascolto A/B con l'originale (norns shield) a parità di hz. Sull'A/B: non c'è aderenza 1:1 (è un porting da SC a C++, non una traduzione esatta campione per campione), ma al giudizio dell'utente il carattere è simile e analogo all'originale — le voci che si sovrappongono e i battimenti che variano e si alternano risultano coerenti. Prossimo passo: v1.0-b (densità e ruvidità sui due potenziometri, hz sull'encoder).
+
+Cambiamenti v1.8 -> v1.9 (2026-10-29): v1.0-b implementato. Scoperto (foto dell'utente) un terzo controllo fisico sul Pod non documentato finora: un trimmer analogico sullo stadio di uscita cuffie, non collegato all'ADC del Daisy, che non ha alcun effetto sull'uscita AUX. Decisione operativa: POT1 -> densità, POT2 -> ruvidità, `amp` fissa a 0,5 in firmware (il volume reale passa dal trimmer solo su cuffie; su AUX resta fisso in questo step, scelta consapevole dell'utente). `kEnvOffset` (costante 0,2) diventato parametro densità in `[-0,6, 0,9]`, già smussato dal lag2(13s) esistente. Il range dell'esponente di modulazione (fisso 0,9-1,7) diventato parametro ruvidità: estremo basso fisso 0,9, estremo alto variabile `[1,1, 4,0]`, con slew dedicato (tau 50 ms) perché non passa per nessun filtro a valle. Verificato su PC: nessun NaN su tutte le combinazioni estreme, picco massimo 0,58; a densità minima il suono può restare silenzioso oltre 20-30 s (inviluppo lentissimo, non un guasto). Compila pulito per Cortex-M7 (FLASH 82,9 KB). Non verificato: comportamento sul Pod reale, taratura dei due range all'ascolto.
+
+Cambiamenti v1.9 -> v1.10 (2026-10-29): v1.0-b chiuso. Confermato dall'utente ad ascolto sul Pod reale: controlli reattivi e senza scatti, encoder cambia frequenza, estremi di densità/ruvidità coerenti, mai raggiunta saturazione/"panic". Range lasciati invariati, nessuna taratura necessaria. Prossimo passo: v1.1 (sei parametri via MIDI CC da Max su USB, con slew nel firmware).
  
 ## Idea e obiettivo
 Device portatile a batteria per musica generativa (drone / stile Eno) guidata da dati esterni (API; in futuro bioritmo). Prima strumento personale (v1); replicabilità (firmware open-source + BOM/kit) da valutare solo dopo un checkpoint di ascolto con 4-5 persone della cerchia sperimentale.
@@ -18,6 +24,7 @@ Device portatile a batteria per musica generativa (drone / stile Eno) guidata da
 | Alimentazione Seed | V | VIN 4-17 V (datasheet); alimentabile da USB e VIN insieme senza danni (datasheet, forum Electro-Smith). Una LiPo (≈3,0-4,2 V) collegata diretta a VIN esce dal range: serve un boost |
 | Radio sul Seed | P | Il datasheet non elenca alcuna radio; quindi il wifi richiede un modulo esterno |
 | Daisy Pod | V | Include un Seed; 2 potenziometri, 1 encoder, 2 pulsanti, 2 LED RGB, MIDI in TRS, jack audio; alimentato via USB; ha "extra pinouts" per sensori e schermi OLED |
+| Daisy Pod: trimmer volume | V (foto + osservazione dell'utente) | Oltre a POT1/POT2 e all'encoder, la scheda ha un terzo controllo: un trimmer a rotella vicino ai condensatori d'uscita, sullo stadio analogico di uscita. Non e' collegato all'ADC del Daisy, il firmware non lo legge ne' lo gestisce. **Agisce solo sull'uscita cuffie, non sull'uscita AUX**: sull'AUX il trimmer non ha alcun effetto, l'unico controllo di livello disponibile su quell'uscita e' `amp` via software |
 | Pod: ADC liberi | P | Secondo il forum Electro-Smith, sul Pod restano liberi solo due ingressi analogici |
 | Seed estraibile dal Pod | U | Confermato dall'utente a vista: non è saldato |
 | MIDI UART | V | libDaisy gestisce MIDI su UART1; il Seed usa USART1 sui pin 13 e 14 (wiki Oopsy) |
@@ -79,7 +86,7 @@ Parametri proposti per la v1 (da validare all'ascolto):
 | 4 | ruvidità (profondità di modulazione) | range dell'esponente 0,9-1,7 |
 | 5 | coda (lunghezza del comb) | range del decay 0,3-3 s |
 | 6 | battimenti (velocità) | fattore x/2 Hz sulla deriva |
-Restano fissi: rotazione stereo, lag di 13 s. In v1.0-a sono esposti solo 1 e 2.
+Restano fissi: rotazione stereo, lag di 13 s. In v1.0-a erano esposti solo 1 e 2 (hz, amp); in v1.0-b si aggiungono 3 e 4 (densità, ruvidità) su POT1/POT2, amp passa fissa.
  
 Note di ascolto: con hz = 60 le voci subarmoniche scendono a circa 30 e 20 Hz, e l'uscita del Seed è accoppiata in AC: sul Daisy parte di quel contenuto sarà attenuata rispetto all'originale su norns [V per l'accoppiamento AC, effetto da ascoltare].
  
@@ -113,8 +120,8 @@ Note di ascolto: con hz = 60 le voci subarmoniche scendono a circa 30 e 20 Hz, e
 | Step | Cosa | Hardware | Stato | Fatto quando |
 |---|---|---|---|---|
 | v0 | Daisy Toolchain e VS Code installati su macOS, firmware di prova (audio in uscita) caricato via USB (DFU) | Pod | da fare (da parte dell'utente) | Senti un tono dal jack |
-| v1.0-a | Porting di Eliane così com'è (solo hz e amp), block size 64, intestazione di @sixolet copiata | Pod, alimentato USB | audio confermato su hardware (2026-10-29, dopo fix `hw.StartAdc()`); carico CPU misurato 36-40% medio, 40-41% massimo (sotto soglia gialla 50%). Da fare: ascolto A/B con l'originale, 30 minuti senza click/glitch | Ascolto A/B con l'originale (la tua norns shield) a parità di hz: stesso carattere; 30 minuti senza click né glitch; carico CPU misurato (LED2 / CpuLoadMeter) |
-| v1.0-b | Densità e ruvidità sui due potenziometri, hz sull'encoder | Pod | da fare | Le due manopole cambiano il carattere in modo udibile e senza scatti |
+| v1.0-a | Porting di Eliane così com'è (solo hz e amp), block size 64, intestazione di @sixolet copiata | Pod, alimentato USB | **Chiuso (2026-10-29).** Audio confermato su hardware (dopo fix `hw.StartAdc()`); carico CPU misurato 36-40% medio, 40-41% massimo (sotto soglia gialla 50%); 30 minuti di funzionamento continuo senza interruzioni confermati dall'utente (solo potenziometro volume attivo); ascolto A/B con l'originale confermato dall'utente: non aderenza 1:1 (porting SC -> C++), ma carattere simile e analogo — voci sovrapposte e battimenti coerenti con l'originale | Tutti i criteri soddisfatti |
+| v1.0-b | Densità e ruvidità sui due potenziometri, hz sull'encoder | Pod | **Chiuso (2026-10-29).** Confermato all'ascolto sul Pod: controlli reattivi e senza scatti, encoder cambia frequenza, estremi di densità/ruvidità coerenti, mai raggiunta saturazione/"panic". Range lasciati come da prima implementazione | Tutti i criteri soddisfatti |
 | v1.1 | Sei parametri via MIDI CC da Max su USB, con slew nel firmware | Pod + Mac | da fare | Nessuna scalettatura udibile; solo se serve, coppie CC a 14 bit |
 | v1.2 | Un dato reale (es. pressione barometrica da un'API scelta) letto da Max, mapping in file JSON | Pod + Mac | da fare | Tre sessioni da un'ora registrate; il mapping cambia solo modificando il JSON |
 | v1.3 | OLED con sei barre e nome della sorgente | Seed su breadboard + OLED | da fare | Display fluido, nessun glitch audio. Prima di acquistare, controllare il chip dello schermo contro i driver di libDaisy |
@@ -127,6 +134,10 @@ Fuori dalla v1: wifi a bordo, più sorgenti, preset e salvataggi, bioritmo, PCB,
 - v2: micro con wifi (modulo certificato) che legge le API e applica il JSON, MIDI CC via UART; provisioning wifi; risparmio energetico (wifi a intervalli). Autonomia da misurare.
 - v3: bioritmo come nuova sorgente nello stesso mapping.
 - Replicabilità: risolvere prima le voci [NV] di licenza (hvcc generato, se usato), riaprire i punti sui titolari e sul drone, decidere tra strada A e B, poi certificazione e termini API.
+## Idee raccolte, non decise (da valutare più avanti, fuori roadmap v1)
+- Mappare le variazioni oggi affidate ai potenziometri (densità, ruvidità, ...) su curve LFO invece che su un valore statico — scenario più evoluto, probabilmente dopo v1.1/v1.2 quando ci sono più parametri e il mapping JSON.
+- Eliane è il drone di base scelto e approvato, ma all'ascolto prolungato (2026-10-29) l'utente lo descrive, di suo, come "a tratti ossessivo, disturbante e angosciante" — gli piace e lo predispone al focus, ma non è detto che valga per chiunque ascolti il device. Idea per il futuro: una ricerca umana (ascolto dell'utente) di altri drone da affiancare a Eliane, per stati d'animo o sorgenti di dati diversi. Non pianificata, nessun impegno di licenza aggiuntivo preso finché non si sceglie un drone specifico.
+
 ## Rischio principale
 Scope troppo largo al primo passaggio (tre progetti precedenti arenati per questo). La v1 resta volutamente piccola.
  

@@ -7,7 +7,9 @@
 //   // (seven sines phase-modulating each other in a crosslinked ring)
 // Porting Daisy: progetto Aeolian, 2026-10-28. Licenza: GNU GPL v3.0 (vedi eliane.h).
 //
-// Controlli: encoder = hz (un semitono per scatto, 10..1000 Hz, default 60), knob1 = amp.
+// Controlli (v1.0-b): encoder = hz (un semitono per scatto, 10..1000 Hz, default 60),
+// POT1 = densita', POT2 = ruvidita'. amp e' fissa (0.5): il volume reale si regola col
+// trimmer analogico del Pod (stadio cuffie) o, sull'uscita AUX, non e' regolabile in questo step.
 // LED1: verde fisso = in esecuzione. LED2: carico CPU (verde < 50%, giallo < 80%, rosso oltre).
 // Prerequisiti: libDaisy compilata, Daisy Toolchain. Nessun modulo DaisySP.
 #include "daisy_pod.h"
@@ -66,7 +68,8 @@ int main(void)
             synth.SetHz(hzTarget);
             hzTarget = synth.Hz(); // allinea ai limiti
         }
-        synth.SetAmp(hw.knob1.Process());
+        synth.SetDensity(hw.knob1.Process());
+        synth.SetRoughness(hw.knob2.Process());
 
         hw.led1.Set(0.0f, 0.3f, 0.0f);
         if(System::GetNow() - t0 > 500)
