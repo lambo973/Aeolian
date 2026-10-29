@@ -1,0 +1,82 @@
+# Aeolian — istruzioni di progetto per Claude Code
+
+Aggiornato: 2026-10-29. Riferimento di stato esteso: `sintesi-progetto.md` (copiarlo nel repo accanto a questo file).
+
+## Progetto
+Device portatile a batteria per musica generativa (drone, stile Eno) guidata da dati esterni (API; in futuro bioritmo). Motore audio: Daisy Seed. Per la v1.0 si usa il Daisy Pod (Seed incluso, estraibile). Dati e mapping stanno fuori dal Daisy: v1 Max su Mac via MIDI CC USB, v2 micro con wifi via UART MIDI. Il mapping dato -> parametro vive in un file JSON, non nel firmware.
+
+Obiettivo: primo strumento personale funzionante (v1). Replicabilità (firmware open-source + BOM/kit) da valutare solo dopo un checkpoint di ascolto con 4-5 persone. Bioritmo e PCB dedicata fuori dalla v1.
+
+## Metodo
+- Micro-step versionati (v1.0-a, v1.0-b, v1.1...), nessun refactor non richiesto, nessun over-engineering. Prima il suono, poi l'integrazione.
+- Interventi chirurgici. Nessuna dipendenza nuova senza motivo.
+- Distinguere sempre Daisy Seed da Daisy Pod quando si parla di hardware.
+- Dichiarare ciò che è non verificato invece di darlo per certo. Marcare: verificato su fonte o prova, non verificato, fornito dall'utente.
+- Replicabilità: segnalare impatti su licenze, certificazioni radio, dipendenze da API terze.
+- Aggiornare `sintesi-progetto.md` quando cambiano direzione o decisioni.
+
+## Stile di risposta (utente: Alessandro, sviluppatore)
+- Task tecnici/debug: Problema / Causa / Soluzione / Codice / Nota critica. Conversazione e valutazioni: prosa, tono da collega.
+- Codice completo ed eseguibile, zero placeholder. Commenti brevi sopra il blocco, che spiegano il perché.
+- Niente emoji, firme, storytelling, suggerimenti non richiesti.
+- Correzioni nette e motivate; errori ammessi senza giri di parole.
+
+## Licenza e crediti
+Il firmware è un porting di "Eliane" di @sixolet (da dronecaster, GPLv3): opera derivata, quindi GPLv3 se distribuita. Mantenere l'intestazione originale:
+```
+// @sixolet
+// Eliane
+// Feedback, slow beatings, highs and lows
+// (seven sines phase-modulating each other in a crosslinked ring)
+```
+più la riga sul porting per Daisy e le modifiche datate. Nessun modulo DaisySP usato (evita la questione LGPL). libDaisy è MIT.
+
+## Stato del codice (v1.0-a)
+Cartella `v1.0-a/`: `eliane.h` (DSP header-only, host-testabile), `main.cpp` (Pod), `Makefile`, `README.md`, `host_test.cpp` (render su PC). libDaisy come cartella sorella (`LIBDAISY_DIR ?= ../libDaisy`).
+
+Verificato (2026-10-28):
+- Il firmware compila e linka per Cortex-M7 (arm-none-eabi-gcc 13.2.1): FLASH 90,7 KB, SRAM 61,7 KB, SDRAM 115 KB.
+- Il solo DSP, compilato su PC e renderizzato offline a 48 kHz (180 s a 60 Hz, 120 s con salto a 300 Hz): nessun NaN, picco 0,47, spettro coerente con l'originale.
+
+Verificato anche su hardware (2026-10-29): audio presente su aux e cuffie, carico CPU 36-40% medio / 40-41% massimo. Non verificato: confronto d'ascolto con l'originale SC, stabilità su 30 minuti continui.
+
+Comportamento atteso: il comb restituisce solo il segnale ritardato, quindi nei primi 0,3 s dall'avvio l'uscita è silenziosa. Poi l'audio deve comparire anche con le manopole ferme.
+
+## Problema risolto (2026-10-29)
+Causa: in `main.cpp` mancava `hw.StartAdc()`. `hw.Init()` configura i canali delle manopole ma non avvia la conversione ADC; senza quella chiamata `hw.knob1.Process()`/`knob2.Process()` restituivano sempre 0, quindi `amp` restava a 0 e il comb non riceveva mai energia nuova (uscita a zero dopo il transitorio iniziale). Verificato per confronto con 5 esempi Pod ufficiali di questo repository, tutti con `StartAdc()` prima di `StartAudio()`. Fix: aggiunta la chiamata. Confermato ad ascolto dall'utente il 2026-10-29.
+
+Percorso di debug seguito (per riferimento, ipotesi scartate):
+1. Carico CPU eccessivo: escluso, misurato 36-40% medio / 40-41% massimo con `CpuLoadMeter`, sotto la soglia gialla (50%).
+2. Riavvii ripetuti: escluso con un contatore di boot in BACKUP_SRAM e log seriale (nessuna ripetizione di "boot #").
+3. NaN/valori non finiti nel DSP: escluso con un contatore dedicato nella classe `Eliane` (sempre 0).
+4. Causa reale: manopole sempre lette a 0 indipendentemente dalla posizione fisica -> ADC mai avviato.
+
+Nota (superata): il sfarfallio simmetrico dei due LED osservato nel primissimo tentativo (prima di isolare il problema) non è stato spiegato con certezza, ma non si è più ripresentato durante il debug strumentato; non bloccante, la causa trovata spiega il sintomo principale (silenzio totale, manopole inerti).
+
+## Prossimi passi per chiudere v1.0-a
+1. Rimuovere la strumentazione di debug aggiunta per questa sessione (log seriale, bootCount, badCount, picco, lettura di knob2) da `main.cpp`/`eliane.h`, se non la si vuole tenere per il test di stabilità sotto.
+2. Ascolto A/B con l'originale (norns shield) a parità di hz.
+3. 30 minuti di funzionamento continuo senza click né glitch.
+
+## Build e flash
+```
+cd v1.0-a
+make clean && make
+# Seed in DFU (BOOT premuto, poi RESET)
+make program-dfu
+```
+Ambiente dell'utente: macOS, VS Code, Daisy Toolchain, libDaisy clonata con `--recurse-submodules` e compilata.
+
+## Roadmap
+| Step | Cosa | Stato |
+|---|---|---|
+| v0 | Toolchain e tono di prova | fatto dall'utente |
+| v1.0-a | Eliane così com'è (hz, amp), block 64 | audio confermato su hardware (2026-10-29); mancano ascolto A/B con l'originale e 30 min senza glitch |
+| v1.0-b | Densità e ruvidità sui due potenziometri, hz su encoder | da fare |
+| v1.1 | Sei parametri via MIDI CC USB con slew | da fare |
+| v1.2 | Un dato reale + mapping in JSON | da fare |
+| v1.3 | OLED su Seed in breadboard | da fare |
+| v1.4 | LiPo + boost 5 V | da fare |
+| v1.5 | Checkpoint di ascolto con 4-5 persone | da fare |
+
+Fuori dalla v1: wifi a bordo, più sorgenti, preset, bioritmo, PCB, case.
